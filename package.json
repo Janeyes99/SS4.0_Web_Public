@@ -1,0 +1,12 @@
+{
+  "name": "ss4-web-public-sync",
+  "version": "20260729.1.0",
+  "private": true,
+  "description": "SS4.0 Web public deployment with realtime multi-screen sync.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
