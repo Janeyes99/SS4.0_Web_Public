@@ -13,15 +13,16 @@
 
 如果 Render 提示需要付费或绑卡，直接用 Deno Deploy。
 
-1. 打开 https://dash.deno.com
+1. 打开 https://console.deno.com
 2. 使用 GitHub 登录。
-3. 点击 `New Project`。
-4. 选择 GitHub 仓库：
+3. 如果提示创建 Organization，先创建一个默认组织。
+4. 创建一个新的 App/Project。
+5. 连接 GitHub 仓库：
    `Janeyes99/SS4.0_Web_Public`
-5. 选择分支：`main`
-6. Entry point 填：
+6. 选择分支：`main`
+7. Entry point 填：
    `main.js`
-7. 点击部署。
+8. 点击部署。
 
 部署完成后会得到一个公网网址，例如：
 `https://ss4-web-public-sync.deno.dev`
