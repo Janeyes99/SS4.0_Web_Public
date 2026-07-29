@@ -132,6 +132,7 @@
             sourceId: body.sourceId || clientId,
             updatedAt: Date.now(),
           });
+          if (!isHost) send(hostConn, { type: "state", state });
         } catch {}
       }
       return response(state);
