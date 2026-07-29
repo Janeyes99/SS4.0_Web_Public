@@ -7,9 +7,32 @@
 - 视频仍然放在每台 Mac 本地：`/Users/用户名/Desktop/SS4.0_Web/video`
 - 每台 Mac 需要运行 `Mac客户端-启动本地视频服务.command`
 - GitHub Pages 不能单独完成实时同步，因为它没有后台 `/api/state` 服务。
-- 推荐用 Render 部署本仓库。Render 会运行 `server.js`，提供网页和同步接口。
+- 推荐优先用 Deno Deploy 免费部署本仓库。Render 只作为备用方案。
 
-## 部署到 GitHub + Render
+## 推荐免费部署：GitHub + Deno Deploy
+
+如果 Render 提示需要付费或绑卡，直接用 Deno Deploy。
+
+1. 打开 https://dash.deno.com
+2. 使用 GitHub 登录。
+3. 点击 `New Project`。
+4. 选择 GitHub 仓库：
+   `Janeyes99/SS4.0_Web_Public`
+5. 选择分支：`main`
+6. Entry point 填：
+   `main.js`
+7. 点击部署。
+
+部署完成后会得到一个公网网址，例如：
+`https://ss4-web-public-sync.deno.dev`
+
+访问方式：
+- 控制页面：`https://你的项目名.deno.dev/`
+- 中屏：`https://你的项目名.deno.dev/?screen=center`
+- 左屏：`https://你的项目名.deno.dev/?screen=left`
+- 右屏：`https://你的项目名.deno.dev/?screen=right`
+
+## 备用方案：GitHub + Render
 
 1. 打开 GitHub，新建一个仓库，例如：`SS4.0_Web_Public`
 2. 把本包内所有文件上传到这个仓库根目录。
@@ -23,20 +46,20 @@
 
 ## 公网访问地址
 
-假设 Render 给你的公网地址是：
-`https://你的服务名.onrender.com`
+假设公网部署平台给你的地址是：
+`https://你的服务名.deno.dev`
 
 控制页面：
-`https://你的服务名.onrender.com/`
+`https://你的服务名.deno.dev/`
 
 中屏显示：
-`https://你的服务名.onrender.com/?screen=center`
+`https://你的服务名.deno.dev/?screen=center`
 
 左屏显示：
-`https://你的服务名.onrender.com/?screen=left`
+`https://你的服务名.deno.dev/?screen=left`
 
 右屏显示：
-`https://你的服务名.onrender.com/?screen=right`
+`https://你的服务名.deno.dev/?screen=right`
 
 ## 每台 Mac 需要做什么
 
@@ -58,6 +81,6 @@
 - 确认视频文件名包含“左”“中”“右”对应素材。
 
 如果多个电脑不同步：
-- 确认所有电脑打开的是同一个 Render 公网网址。
-- 不要混用公司内网地址 `10.133.72.116:3366` 和 Render 公网地址。
+- 确认所有电脑打开的是同一个 Deno 公网网址。
+- 不要混用公司内网地址 `10.133.72.116:3366` 和 Deno 公网地址。
 - 控制页面使用根路径 `/`，左/中/右显示页面使用 `?screen=...`。
