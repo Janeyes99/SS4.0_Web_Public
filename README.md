@@ -20,7 +20,7 @@ GitHub Pages 设置：
 3. `Build and deployment` 选择：
    - Source: `Deploy from a branch`
    - Branch: `main`
-   - Folder: `/dist`
+   - Folder: `/ (root)`
 4. 保存后等待 1-3 分钟。
 
 部署完成后的公网地址：
