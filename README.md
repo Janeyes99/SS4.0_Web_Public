@@ -6,7 +6,7 @@
 - 只上传本包到 GitHub，不要上传视频素材。
 - 视频仍然放在每台 Mac 本地：`/Users/用户名/Desktop/SS4.0_Web/video`
 - 每台 Mac 需要运行 `Mac客户端-启动本地视频服务.command`
-- 当前 GitHub Pages 版已内置公网同步脚本，不再依赖公司内网。
+- 当前 GitHub Pages 版已内置公网房间同步脚本，不再依赖公司内网，也不再依赖 WebRTC/P2P。
 - Deno Console 目前对新账号可能会显示 `403 SIGNUP_UNAVAILABLE`，所以本包优先使用 GitHub Pages。
 
 ## 推荐部署：GitHub Pages
@@ -40,7 +40,7 @@ GitHub Pages 设置：
 右屏显示：
 `https://janeyes99.github.io/SS4.0_Web_Public/?screen=right`
 
-建议先打开控制页面，再打开左/中/右三个显示页面。控制页面保持打开，不要关闭。
+建议先打开控制页面，再打开左/中/右三个显示页面。控制页面左下角会显示“公网同步 已连接”。
 
 ## 多组实验同时运行
 
@@ -82,6 +82,8 @@ GitHub Pages 设置：
 如果多个电脑不同步：
 - 确认所有电脑打开的是同一个 GitHub Pages 地址。
 - 如果用了 `room` 参数，确认所有电脑的 `room` 完全一致。
+- 确认控制页面左下角显示“公网同步 已连接”。
+- 修改设置后等待 1-2 秒，再看其他电脑是否同步。
 - 建议先打开控制页面，再打开左屏、中屏、右屏。
 - 不要混用公司内网地址 `10.133.72.116:3366` 和 GitHub Pages 公网地址。
 
