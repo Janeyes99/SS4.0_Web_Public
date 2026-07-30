@@ -18,7 +18,10 @@
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "ss4-public";
   const topic = `ss4-sync-${hashRoom(room)}`;
+  const mqttTopic = `ss4/sync/${hashRoom(room)}`;
   const relayBase = `https://ntfy.sh/${topic}`;
+  const mqttScriptUrl = "./mqtt.min.js?v=5.15.2";
+  const mqttBrokerUrl = "wss://broker.emqx.io:8084/mqtt";
   const storageKey = `ss4-public-sync-state:${room}`;
   const clientId =
     typeof crypto !== "undefined" && crypto.randomUUID
@@ -27,6 +30,9 @@
 
   let state = readInitialState();
   let connected = false;
+  let ntfyConnected = false;
+  let mqttConnected = false;
+  let mqttClient = null;
   let lastReceivedAt = 0;
   let lastSentAt = 0;
   let lastRelayTime = 0;
@@ -40,6 +46,7 @@
     mode: "ntfy",
     room,
     topic,
+    mqttTopic,
     status: "starting",
     getState: () => state,
   };
@@ -113,7 +120,8 @@
   }
 
   function setStatus(nextStatus) {
-    window.__SS4_PUBLIC_SYNC__.status = nextStatus;
+    window.__SS4_PUBLIC_SYNC__.status =
+      ntfyConnected || mqttConnected || connected ? "connected" : nextStatus;
     updateStatusBadge();
   }
 
@@ -185,13 +193,29 @@
         .then((res) => {
           if (!res.ok) throw new Error(`relay ${res.status}`);
           connected = true;
+          ntfyConnected = true;
           lastSentAt = Date.now();
           setStatus("connected");
         })
         .catch(() => {
+          ntfyConnected = false;
           setStatus(connected ? "degraded" : "offline");
         });
+      publishMqttPayload(payload);
     }, 120);
+  }
+
+  function handleSyncPayload(payload) {
+    if (
+      !payload ||
+      payload.type !== "ss4-state" ||
+      payload.room !== room ||
+      payload.sender === clientId
+    ) {
+      return;
+    }
+    lastReceivedAt = Date.now();
+    applyState(payload.state, false);
   }
 
   function handleRelayEnvelope(envelope) {
@@ -219,16 +243,7 @@
     } catch {
       return;
     }
-    if (
-      !payload ||
-      payload.type !== "ss4-state" ||
-      payload.room !== room ||
-      payload.sender === clientId
-    ) {
-      return;
-    }
-    lastReceivedAt = Date.now();
-    applyState(payload.state, false);
+    handleSyncPayload(payload);
   }
 
   function startEventSource() {
@@ -236,6 +251,7 @@
       const source = new EventSource(`${relayBase}/sse?since=all`);
       source.onopen = () => {
         connected = true;
+        ntfyConnected = true;
         setStatus("connected");
       };
       source.onmessage = (event) => {
@@ -244,6 +260,7 @@
         } catch {}
       };
       source.onerror = () => {
+        ntfyConnected = false;
         setStatus(connected ? "degraded" : "offline");
       };
     } catch {
@@ -258,7 +275,15 @@
         cache: "no-store",
         mode: "cors",
       })
-        .then((res) => (res.ok ? res.text() : ""))
+        .then((res) => {
+          if (res.ok) {
+            connected = true;
+            ntfyConnected = true;
+            setStatus("connected");
+            return res.text();
+          }
+          return "";
+        })
         .then((text) => {
           if (!text) return;
           text
@@ -271,10 +296,101 @@
               } catch {}
             });
         })
-        .catch(() => {});
+        .catch(() => {
+          ntfyConnected = false;
+          setStatus(mqttConnected ? "degraded" : "offline");
+        });
     };
     pollTimer = window.setInterval(poll, 2500);
     poll();
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src^="${src.split("?")[0]}"]`);
+      if (existing) {
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", reject, { once: true });
+        if (window.mqtt) resolve();
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  function publishMqttPayload(payload) {
+    if (!mqttClient || !mqttConnected) return false;
+    try {
+      mqttClient.publish(mqttTopic, JSON.stringify(payload), { qos: 0, retain: true });
+      lastSentAt = Date.now();
+      setStatus("connected");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function startMqttFallback() {
+    if (!("WebSocket" in window)) return;
+    loadScript(mqttScriptUrl)
+      .then(() => {
+        if (!window.mqtt || typeof window.mqtt.connect !== "function") {
+          throw new Error("mqtt library unavailable");
+        }
+        mqttClient = window.mqtt.connect(mqttBrokerUrl, {
+          clientId: `ss4_${hashRoom(room)}_${clientId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`,
+          clean: true,
+          connectTimeout: 8000,
+          keepalive: 30,
+          reconnectPeriod: 2000,
+          protocolVersion: 4,
+        });
+        mqttClient.on("connect", () => {
+          mqttConnected = true;
+          connected = true;
+          setStatus("connected");
+          mqttClient.subscribe(mqttTopic, { qos: 0 });
+          if (pendingPublishState && pendingPublishState.config) {
+            publishMqttPayload({
+              type: "ss4-state",
+              room,
+              sender: clientId,
+              state: pendingPublishState,
+            });
+          }
+        });
+        mqttClient.on("message", (incomingTopic, message) => {
+          if (incomingTopic !== mqttTopic) return;
+          try {
+            const text =
+              typeof message === "string"
+                ? message
+                : new TextDecoder().decode(message);
+            handleSyncPayload(JSON.parse(text));
+          } catch {}
+        });
+        mqttClient.on("close", () => {
+          mqttConnected = false;
+          setStatus(ntfyConnected ? "degraded" : "offline");
+        });
+        mqttClient.on("offline", () => {
+          mqttConnected = false;
+          setStatus(ntfyConnected ? "degraded" : "offline");
+        });
+        mqttClient.on("error", () => {
+          mqttConnected = false;
+          setStatus(ntfyConnected ? "degraded" : "offline");
+        });
+      })
+      .catch(() => {
+        mqttConnected = false;
+        setStatus(ntfyConnected ? "degraded" : "offline");
+      });
   }
 
   function ensureStatusBadge() {
@@ -307,6 +423,7 @@
     const badge = document.getElementById("ss4-public-sync-status");
     if (!badge) return;
     const status = window.__SS4_PUBLIC_SYNC__.status;
+    const channelLabel = `HTTP:${ntfyConnected ? "通" : "断"} MQTT:${mqttConnected ? "通" : "断"}`;
     const now = Date.now();
     const receivedLabel = lastReceivedAt
       ? `收 ${Math.max(0, Math.round((now - lastReceivedAt) / 1000))}s`
@@ -322,7 +439,7 @@
           : status === "offline"
             ? "未连接"
             : "连接中";
-    badge.textContent = `公网同步 ${label} · room: ${room} · ${sentLabel} · ${receivedLabel}`;
+    badge.textContent = `公网同步 ${label} · room: ${room} · ${channelLabel} · ${sentLabel} · ${receivedLabel}`;
   }
 
   window.setInterval(updateStatusBadge, 1000);
@@ -334,6 +451,7 @@
   persistState();
   startEventSource();
   startPollingFallback();
+  startMqttFallback();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", ensureStatusBadge, { once: true });
   } else {
