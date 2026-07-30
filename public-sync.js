@@ -1,11 +1,11 @@
 (function () {
   const params = new URLSearchParams(window.location.search);
-  const peerMode =
+  const publicMode =
     window.location.hostname.endsWith("github.io") ||
-    params.get("sync") === "peer" ||
-    params.get("sync") === "p2p";
+    params.get("sync") === "public" ||
+    params.get("sync") === "ntfy";
 
-  if (!peerMode || window.__SS4_PUBLIC_SYNC__) return;
+  if (!publicMode || window.__SS4_PUBLIC_SYNC__) return;
 
   const nativeFetch = window.fetch.bind(window);
   const appChannelName = "ss4-display-sync";
@@ -14,25 +14,57 @@
     params.get("room") ||
     window.location.pathname.replace(/^\/|\/$/g, "") ||
     "ss4-public";
-  const room = roomRaw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "ss4-public";
+  const room =
+    roomRaw
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "ss4-public";
+  const topic = `ss4-sync-${hashRoom(room)}`;
+  const relayBase = `https://ntfy.sh/${topic}`;
   const storageKey = `ss4-public-sync-state:${room}`;
-  const hostId = `ss4-${room}-host`;
   const clientId =
-    crypto && crypto.randomUUID
+    typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID()
       : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-  let peer = null;
-  let isHost = false;
-  let hostConn = null;
-  let reconnectTimer = null;
-  const conns = new Map();
+  let state = readInitialState();
+  let connected = false;
+  let lastRelayTime = 0;
+  let pendingPublishTimer = null;
+  let pendingPublishState = null;
+  let pollTimer = null;
+  const seenRelayIds = new Set();
 
-  const readInitialState = () => {
+  window.__SS4_PUBLIC_SYNC__ = {
+    enabled: true,
+    mode: "ntfy",
+    room,
+    topic,
+    status: "starting",
+    getState: () => state,
+  };
+
+  function hashRoom(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function normalizeState(payload) {
+    return {
+      version: Number(payload.version) || 0,
+      config: payload.config || null,
+      stage: payload.stage || "testing",
+      sourceId: payload.sourceId || "ss4-public",
+      updatedAt: payload.updatedAt || Date.now(),
+    };
+  }
+
+  function readInitialState() {
     try {
       const queryState = params.get("state");
       if (queryState) {
@@ -46,19 +78,20 @@
         if (parsed && parsed.config) return normalizeState(parsed);
       } catch {}
     }
-    return { version: 0, config: null, stage: null, sourceId: "ss4-peer-init" };
-  };
-
-  let state = readInitialState();
-
-  function normalizeState(payload) {
     return {
-      version: Number(payload.version) || 0,
-      config: payload.config || null,
-      stage: payload.stage || "testing",
-      sourceId: payload.sourceId || "ss4-peer",
-      updatedAt: payload.updatedAt || Date.now(),
+      version: 0,
+      config: null,
+      stage: null,
+      sourceId: "ss4-public-init",
+      updatedAt: Date.now(),
     };
+  }
+
+  function sameState(next) {
+    return (
+      JSON.stringify(next.config) === JSON.stringify(state.config) &&
+      next.stage === state.stage
+    );
   }
 
   function persistState() {
@@ -80,30 +113,9 @@
     } catch {}
   }
 
-  function sameState(next) {
-    return (
-      JSON.stringify(next.config) === JSON.stringify(state.config) &&
-      next.stage === state.stage
-    );
-  }
-
-  function applyState(payload, fromConn) {
-    const next = normalizeState(payload || {});
-    if (!next.config) return;
-    if (!isHost && next.version <= state.version && sameState(next)) return;
-
-    if (isHost && fromConn) {
-      next.version = Math.max(state.version + 1, next.version);
-      next.sourceId = next.sourceId || clientId;
-    }
-
-    state = next.version <= state.version && !sameState(next)
-      ? { ...next, version: state.version + 1 }
-      : next;
-    persistState();
-    publishLocal();
-
-    if (isHost) broadcastState(fromConn);
+  function setStatus(nextStatus) {
+    window.__SS4_PUBLIC_SYNC__.status = nextStatus;
+    updateStatusBadge();
   }
 
   function response(body, status = 200) {
@@ -116,140 +128,205 @@
     });
   }
 
+  function applyState(payload, shouldPublishRemote) {
+    const next = normalizeState(payload || {});
+    if (!next.config) return;
+    if (next.version < state.version) return;
+    if (next.version === state.version && sameState(next)) return;
+
+    state = next;
+    persistState();
+    publishLocal();
+    if (shouldPublishRemote) scheduleRemotePublish(state);
+  }
+
   window.fetch = async function ss4PublicFetch(input, init) {
     const requestUrl =
       typeof input === "string"
         ? new URL(input, window.location.href)
         : new URL(input.url, window.location.href);
+
     if (requestUrl.pathname === "/api/state") {
       const method = ((init && init.method) || "GET").toUpperCase();
       if (method === "POST") {
         try {
           const body = JSON.parse((init && init.body) || "{}");
-          applyState({
-            ...body,
-            version: state.version + 1,
-            sourceId: body.sourceId || clientId,
-            updatedAt: Date.now(),
-          });
-          if (!isHost) send(hostConn, { type: "state", state });
+          applyState(
+            {
+              ...body,
+              version: Math.max(Date.now(), state.version + 1),
+              sourceId: body.sourceId || clientId,
+              updatedAt: Date.now(),
+            },
+            true
+          );
         } catch {}
       }
       return response(state);
     }
+
     return nativeFetch(input, init);
   };
 
-  function send(conn, message) {
-    if (conn && conn.open) {
-      try {
-        conn.send(message);
-      } catch {}
+  function scheduleRemotePublish(nextState) {
+    pendingPublishState = nextState;
+    window.clearTimeout(pendingPublishTimer);
+    pendingPublishTimer = window.setTimeout(() => {
+      const payload = {
+        type: "ss4-state",
+        room,
+        sender: clientId,
+        state: pendingPublishState,
+      };
+      nativeFetch(relayBase, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        mode: "cors",
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`relay ${res.status}`);
+          connected = true;
+          setStatus("connected");
+        })
+        .catch(() => {
+          setStatus(connected ? "degraded" : "offline");
+        });
+    }, 120);
+  }
+
+  function handleRelayEnvelope(envelope) {
+    if (!envelope || envelope.event === "open" || envelope.event === "keepalive") {
+      connected = true;
+      setStatus("connected");
+      return;
     }
-  }
-
-  function broadcastState(exceptConn) {
-    for (const conn of conns.values()) {
-      if (conn !== exceptConn) send(conn, { type: "state", state });
+    if (envelope.id) {
+      if (seenRelayIds.has(envelope.id)) return;
+      seenRelayIds.add(envelope.id);
+      if (seenRelayIds.size > 200) {
+        const first = seenRelayIds.values().next().value;
+        seenRelayIds.delete(first);
+      }
     }
-  }
+    if (envelope.time) lastRelayTime = Math.max(lastRelayTime, envelope.time);
 
-  function setupConn(conn) {
-    conns.set(conn.peer, conn);
-    conn.on("open", () => {
-      send(conn, { type: "hello", id: clientId });
-      if (state.config) send(conn, { type: "state", state });
-    });
-    conn.on("data", (message) => {
-      if (!message || typeof message !== "object") return;
-      if (message.type === "hello") send(conn, { type: "state", state });
-      if (message.type === "state") applyState(message.state, conn);
-    });
-    conn.on("close", () => conns.delete(conn.peer));
-    conn.on("error", () => conns.delete(conn.peer));
-  }
-
-  function loadPeerJs() {
-    if (window.Peer) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js";
-      script.async = true;
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-  }
-
-  function peerOptions() {
-    return {
-      host: "0.peerjs.com",
-      port: 443,
-      path: "/",
-      secure: true,
-      debug: 0,
-    };
-  }
-
-  function scheduleClientReconnect() {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = window.setTimeout(startClient, 2000);
-  }
-
-  function startHost() {
-    isHost = false;
-    peer = new Peer(hostId, peerOptions());
-    peer.on("open", () => {
-      isHost = true;
-      window.__SS4_PUBLIC_SYNC__.role = "host";
-      if (state.config) persistState();
-    });
-    peer.on("connection", setupConn);
-    peer.on("error", (error) => {
-      if (String(error && error.type).includes("unavailable-id")) {
-        try {
-          peer.destroy();
-        } catch {}
-        startClient();
-      } else {
-        scheduleClientReconnect();
-      }
-    });
-    peer.on("disconnected", () => {
-      try {
-        peer.reconnect();
-      } catch {
-        scheduleClientReconnect();
-      }
-    });
-  }
-
-  function startClient() {
-    isHost = false;
-    window.__SS4_PUBLIC_SYNC__.role = "client";
+    let payload = null;
     try {
-      if (peer && !peer.destroyed) peer.destroy();
-    } catch {}
-    peer = new Peer(undefined, peerOptions());
-    peer.on("open", () => {
-      hostConn = peer.connect(hostId, { reliable: true });
-      setupConn(hostConn);
-    });
-    peer.on("error", scheduleClientReconnect);
-    peer.on("disconnected", scheduleClientReconnect);
+      payload =
+        typeof envelope.message === "string"
+          ? JSON.parse(envelope.message)
+          : envelope.message;
+    } catch {
+      return;
+    }
+    if (
+      !payload ||
+      payload.type !== "ss4-state" ||
+      payload.room !== room ||
+      payload.sender === clientId
+    ) {
+      return;
+    }
+    applyState(payload.state, false);
   }
 
-  window.__SS4_PUBLIC_SYNC__ = {
-    enabled: true,
-    room,
-    role: "starting",
-    getState: () => state,
-  };
+  function startEventSource() {
+    try {
+      const source = new EventSource(`${relayBase}/sse?since=all`);
+      source.onopen = () => {
+        connected = true;
+        setStatus("connected");
+      };
+      source.onmessage = (event) => {
+        try {
+          handleRelayEnvelope(JSON.parse(event.data));
+        } catch {}
+      };
+      source.onerror = () => {
+        setStatus(connected ? "degraded" : "offline");
+      };
+    } catch {
+      setStatus("offline");
+    }
+  }
+
+  function startPollingFallback() {
+    const poll = () => {
+      const since = lastRelayTime > 0 ? Math.max(0, lastRelayTime - 1) : "all";
+      nativeFetch(`${relayBase}/json?poll=1&since=${since}`, {
+        cache: "no-store",
+        mode: "cors",
+      })
+        .then((res) => (res.ok ? res.text() : ""))
+        .then((text) => {
+          if (!text) return;
+          text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .forEach((line) => {
+              try {
+                handleRelayEnvelope(JSON.parse(line));
+              } catch {}
+            });
+        })
+        .catch(() => {});
+    };
+    pollTimer = window.setInterval(poll, 2500);
+    poll();
+  }
+
+  function ensureStatusBadge() {
+    if (params.has("screen") || params.get("syncStatus") === "0") return null;
+    let badge = document.getElementById("ss4-public-sync-status");
+    if (badge) return badge;
+    badge = document.createElement("div");
+    badge.id = "ss4-public-sync-status";
+    badge.style.cssText = [
+      "position:fixed",
+      "left:12px",
+      "bottom:12px",
+      "z-index:2147483647",
+      "padding:7px 10px",
+      "border-radius:8px",
+      "font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+      "color:#d7faff",
+      "background:rgba(3,23,34,.82)",
+      "border:1px solid rgba(34,211,238,.35)",
+      "box-shadow:0 8px 24px rgba(0,0,0,.3)",
+      "pointer-events:none",
+      "backdrop-filter:blur(8px)",
+    ].join(";");
+    document.body.appendChild(badge);
+    updateStatusBadge();
+    return badge;
+  }
+
+  function updateStatusBadge() {
+    const badge = document.getElementById("ss4-public-sync-status");
+    if (!badge) return;
+    const status = window.__SS4_PUBLIC_SYNC__.status;
+    const label =
+      status === "connected"
+        ? "已连接"
+        : status === "degraded"
+          ? "连接不稳"
+          : status === "offline"
+            ? "未连接"
+            : "连接中";
+    badge.textContent = `公网同步 ${label} · room: ${room}`;
+  }
+
+  window.addEventListener("beforeunload", () => {
+    if (pollTimer) window.clearInterval(pollTimer);
+  });
 
   persistState();
-  loadPeerJs()
-    .then(startHost)
-    .catch(() => {
-      window.__SS4_PUBLIC_SYNC__.role = "offline";
-    });
+  startEventSource();
+  startPollingFallback();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureStatusBadge, { once: true });
+  } else {
+    ensureStatusBadge();
+  }
 })();
