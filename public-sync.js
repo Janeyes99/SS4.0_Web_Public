@@ -10,10 +10,7 @@
   const nativeFetch = window.fetch.bind(window);
   const appChannelName = "ss4-display-sync";
   const appStateKey = "ss4-display-state";
-  const roomRaw =
-    params.get("room") ||
-    window.location.pathname.replace(/^\/|\/$/g, "") ||
-    "ss4-public";
+  const roomRaw = params.get("room") || "test01";
   const room =
     roomRaw
       .toLowerCase()
@@ -30,6 +27,8 @@
 
   let state = readInitialState();
   let connected = false;
+  let lastReceivedAt = 0;
+  let lastSentAt = 0;
   let lastRelayTime = 0;
   let pendingPublishTimer = null;
   let pendingPublishState = null;
@@ -186,6 +185,7 @@
         .then((res) => {
           if (!res.ok) throw new Error(`relay ${res.status}`);
           connected = true;
+          lastSentAt = Date.now();
           setStatus("connected");
         })
         .catch(() => {
@@ -227,6 +227,7 @@
     ) {
       return;
     }
+    lastReceivedAt = Date.now();
     applyState(payload.state, false);
   }
 
@@ -277,7 +278,7 @@
   }
 
   function ensureStatusBadge() {
-    if (params.has("screen") || params.get("syncStatus") === "0") return null;
+    if (params.get("syncStatus") === "0") return null;
     let badge = document.getElementById("ss4-public-sync-status");
     if (badge) return badge;
     badge = document.createElement("div");
@@ -306,6 +307,13 @@
     const badge = document.getElementById("ss4-public-sync-status");
     if (!badge) return;
     const status = window.__SS4_PUBLIC_SYNC__.status;
+    const now = Date.now();
+    const receivedLabel = lastReceivedAt
+      ? `收 ${Math.max(0, Math.round((now - lastReceivedAt) / 1000))}s`
+      : "未收";
+    const sentLabel = lastSentAt
+      ? `发 ${Math.max(0, Math.round((now - lastSentAt) / 1000))}s`
+      : "未发";
     const label =
       status === "connected"
         ? "已连接"
@@ -314,8 +322,10 @@
           : status === "offline"
             ? "未连接"
             : "连接中";
-    badge.textContent = `公网同步 ${label} · room: ${room}`;
+    badge.textContent = `公网同步 ${label} · room: ${room} · ${sentLabel} · ${receivedLabel}`;
   }
+
+  window.setInterval(updateStatusBadge, 1000);
 
   window.addEventListener("beforeunload", () => {
     if (pollTimer) window.clearInterval(pollTimer);
