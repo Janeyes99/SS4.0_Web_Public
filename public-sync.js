@@ -394,29 +394,9 @@
   }
 
   function ensureStatusBadge() {
-    if (params.get("syncStatus") === "0") return null;
-    let badge = document.getElementById("ss4-public-sync-status");
-    if (badge) return badge;
-    badge = document.createElement("div");
-    badge.id = "ss4-public-sync-status";
-    badge.style.cssText = [
-      "position:fixed",
-      "left:12px",
-      "bottom:12px",
-      "z-index:2147483647",
-      "padding:7px 10px",
-      "border-radius:8px",
-      "font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-      "color:#d7faff",
-      "background:rgba(3,23,34,.82)",
-      "border:1px solid rgba(34,211,238,.35)",
-      "box-shadow:0 8px 24px rgba(0,0,0,.3)",
-      "pointer-events:none",
-      "backdrop-filter:blur(8px)",
-    ].join(";");
-    document.body.appendChild(badge);
-    updateStatusBadge();
-    return badge;
+    const existingBadge = document.getElementById("ss4-public-sync-status");
+    if (existingBadge) existingBadge.remove();
+    return null;
   }
 
   function updateStatusBadge() {
