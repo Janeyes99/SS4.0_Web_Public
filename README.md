@@ -65,6 +65,10 @@ GitHub Pages 设置：
 1. 将视频放到：
    `/Users/你的用户名/Desktop/SS4.0_Web/video`
 
+   S6 侧屏壁纸还需要：
+   `/Users/你的用户名/Desktop/SS4.0_Web/video/屏保左_16x9.mp4`
+   左屏正常播放，右屏由网页自动镜像。
+
 2. 双击运行：
    `Mac客户端-启动本地视频服务.command`
 
